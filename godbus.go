@@ -1,28 +1,61 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"time"
 
 	linuxproc "github.com/c9s/goprocinfo/linux"
 	"github.com/godbus/dbus"
 )
 
-func main() {
-	log.Println("vim-go")
-	dbus_init()
+type DBUS_TYPE int
 
-	for {
-		time.Sleep(time.Second)
+const (
+	SESSION DBUS_TYPE = iota
+	SYSTEM
+)
+
+func main() {
+	log.Println("dbus-tool")
+
+	//sessionType := "session"
+	dbusType := SESSION
+	isSession := true
+	isSystem := false
+
+	flag.BoolVar(&isSession, "session", true, "use session dbus")
+	flag.BoolVar(&isSystem, "system", false, "use system dbus")
+	flag.Parse()
+
+	if isSession && isSystem {
+		dbusType = SYSTEM
+	} else if !isSession && !isSystem {
+		dbusType = SESSION
+	} else if isSystem {
+		dbusType = SYSTEM
+	} else {
+		dbusType = SESSION
 	}
+
+	// will block
+	dbusMonitor(dbusType)
 }
 
-func dbus_init() {
-	conn, err := dbus.SessionBus()
-	if err != nil {
-		return
+func dbusMonitor(t DBUS_TYPE) {
+	var conn *dbus.Conn
+	var err error
+	if t != SYSTEM {
+		conn, err = dbus.SessionBus()
+		if err != nil {
+			return
+		}
+	} else {
+		conn, err = dbus.SystemBus()
+		if err != nil {
+			return
+		}
 	}
 
 	obj := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus").(*dbus.Object)
@@ -32,14 +65,14 @@ func dbus_init() {
 		return
 	}
 
+	defer conn.Close()
+
 	ch := make(chan *dbus.Signal, 100)
 	conn.Signal(ch)
 
-	go func() {
-		for signal := range ch {
-			signalProcess(conn, signal)
-		}
-	}()
+	for signal := range ch {
+		signalProcess(conn, signal)
+	}
 }
 
 func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
