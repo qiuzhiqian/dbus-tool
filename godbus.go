@@ -63,7 +63,7 @@ func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
 			fmt.Println("========================================")
 			log.Println("sender=", newName)
 
-			prefix := ""
+			prefix := "↑_ "
 			for pid != 0 {
 				cmdline, stat, err := GetPidInfo(pid)
 				if err != nil {
@@ -74,7 +74,7 @@ func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
 				//log.Println("ppid=", stat.Ppid)
 
 				pid = uint32(stat.Ppid)
-				prefix = prefix + "  "
+				prefix = "  " + prefix
 			}
 			fmt.Println("")
 
