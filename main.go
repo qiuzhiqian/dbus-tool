@@ -17,6 +17,31 @@ const (
 	SYSTEM
 )
 
+type ProcessInfo struct {
+	pid    uint32
+	cmd    string
+	sender string
+	uid    uint32
+	child  *ProcessInfo
+}
+
+func (p *ProcessInfo) Display() string {
+	prefix := "↳"
+	tab := ""
+	output := ""
+	current := p
+	for {
+		output = fmt.Sprintf("%s%s%s[%d][%d][%s] %s\n", output, tab, prefix, current.pid, current.uid, current.sender, current.cmd)
+		tab = tab + " "
+		if current.child == nil {
+			break
+		}
+		current = current.child
+	}
+
+	return output
+}
+
 func main() {
 	log.Println("dbus-tool")
 
@@ -58,7 +83,11 @@ func main() {
 	}
 
 	if len(name) != 0 {
-		displayPidTreeBySender(conn, name)
+		p, err := GetPidTreeBySender(conn, name)
+		if err != nil {
+			return
+		}
+		fmt.Println(p.Display())
 		return
 	}
 
@@ -78,7 +107,13 @@ func dbusNamesInfo(conn *dbus.Conn) {
 	}
 
 	for _, name := range names {
-		displayPidTreeBySender(conn, name)
+		//fmt.Println("name:", name)
+		p, err := GetPidTreeBySender(conn, name)
+		if err != nil {
+			continue
+		}
+		fmt.Println(p.Display())
+		//fmt.Println("=======")
 	}
 }
 
@@ -174,22 +209,54 @@ func GetPidInfo(pid uint32) (string, *linuxproc.ProcessStat, error) {
 	return string(fileData), stat, nil
 }
 
-func displayPidTreeBySender(conn *dbus.Conn, name string) error {
+func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 	pid, err := getConnectionUnixProcessID(conn, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	uid, err := getConnectionUnixUser(conn, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	fmt.Println("========================================")
-	log.Println("sender=", name, "uid=", uid)
+	var node *ProcessInfo
 
-	displayPidTree(pid, "↑_ ")
-	return nil
+	for pid != 0 {
+		cmdline, stat, err := GetPidInfo(pid)
+		if err != nil {
+			break
+		}
+
+		if node != nil {
+			parent := &ProcessInfo{
+				pid:    pid,
+				uid:    uid,
+				cmd:    cmdline,
+				sender: name,
+				child:  node,
+			}
+			node = parent
+		} else {
+			node = &ProcessInfo{
+				pid:    pid,
+				uid:    uid,
+				cmd:    cmdline,
+				sender: name,
+			}
+		}
+
+		uid = 0
+		name = ""
+		pid = uint32(stat.Ppid)
+		//fmt.Println("cmd:", cmdline, "ppid:", pid)
+	}
+
+	//fmt.Println("========================================")
+	//log.Println("sender=", name, "uid=", uid)
+
+	//displayPidTree(pid, "↑_ ")
+	return node, nil
 }
 
 func displayPidTree(pid uint32, prefix string) {
