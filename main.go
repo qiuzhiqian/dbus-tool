@@ -175,16 +175,11 @@ func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
 		}
 
 		if oldName == "" && newName != "" {
-			pid, err := getConnectionUnixProcessID(conn, newName)
+			p, err := GetPidTreeBySender(conn, newName)
 			if err != nil {
 				return err
 			}
-
-			fmt.Println("========================================")
-			log.Println("sender=", newName)
-
-			displayPidTree(pid, "↑_ ")
-
+			fmt.Println(p.Display())
 		}
 	}
 
@@ -249,13 +244,11 @@ func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 		uid = 0
 		name = ""
 		pid = uint32(stat.Ppid)
-		//fmt.Println("cmd:", cmdline, "ppid:", pid)
 	}
 
-	//fmt.Println("========================================")
-	//log.Println("sender=", name, "uid=", uid)
-
-	//displayPidTree(pid, "↑_ ")
+	if node == nil {
+		return nil, fmt.Errorf("find node info error")
+	}
 	return node, nil
 }
 
