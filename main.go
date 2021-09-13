@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"time"
 
 	linuxproc "github.com/c9s/goprocinfo/linux"
 	"github.com/godbus/dbus"
+	"golang.org/x/sys/unix"
 )
 
 type DBUS_TYPE int
@@ -112,8 +115,9 @@ func dbusNamesInfo(conn *dbus.Conn) {
 		if err != nil {
 			continue
 		}
+
+		fmt.Println(time.Now(), "=======================")
 		fmt.Println(p.Display())
-		//fmt.Println("=======")
 	}
 }
 
@@ -186,22 +190,33 @@ func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
 	return nil
 }
 
-func GetPidInfo(pid uint32) (string, *linuxproc.ProcessStat, error) {
+func GetPidInfo(pid uint32) (string, *linuxproc.ProcessStat, uint32, error) {
+	pidFile := fmt.Sprintf("/proc/%d", pid)
+	var fileStat unix.Stat_t
+	//获取/proc/$pid文件夹stat，该文件夹stat的uid权限可以代表进程uid
+	err := unix.Stat(pidFile, &fileStat)
+	if err != nil {
+		return "", nil, 0, err
+	}
+
 	fileName := fmt.Sprintf("/proc/%d/cmdline", pid)
 
 	fileData, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		log.Println("read file error =", err)
-		return "", nil, err
+		return "", nil, 0, err
 	}
+
+	//通过hexdump发现，读出来的数据使用\x0分割，为了正常显示，需要使用\x20替换一下。
+	cmdline := bytes.ReplaceAll(fileData, []byte{0x00}, []byte{0x20})
 
 	statName := fmt.Sprintf("/proc/%d/stat", pid)
 	stat, err := linuxproc.ReadProcessStat(statName)
 	if err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
 
-	return string(fileData), stat, nil
+	return string(cmdline), stat, fileStat.Uid, nil
 }
 
 func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
@@ -210,15 +225,15 @@ func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 		return nil, err
 	}
 
-	uid, err := getConnectionUnixUser(conn, name)
+	/*uid, err := getConnectionUnixUser(conn, name)
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	var node *ProcessInfo
 
 	for pid != 0 {
-		cmdline, stat, err := GetPidInfo(pid)
+		cmdline, stat, uid, err := GetPidInfo(pid)
 		if err != nil {
 			break
 		}
@@ -241,7 +256,6 @@ func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 			}
 		}
 
-		uid = 0
 		name = ""
 		pid = uint32(stat.Ppid)
 	}
@@ -254,7 +268,7 @@ func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 
 func displayPidTree(pid uint32, prefix string) {
 	for pid != 0 {
-		cmdline, stat, err := GetPidInfo(pid)
+		cmdline, stat, _, err := GetPidInfo(pid)
 		if err != nil {
 			break
 		}
