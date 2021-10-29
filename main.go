@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	linuxproc "github.com/c9s/goprocinfo/linux"
 	"github.com/godbus/dbus"
 	"golang.org/x/sys/unix"
+
+	"github.com/urfave/cli/v2"
 )
 
 type DBUS_TYPE int
@@ -46,64 +49,123 @@ func (p *ProcessInfo) Display() string {
 }
 
 func main() {
-	log.Println("dbus-tool")
+	app := &cli.App{
+		Name:    "dbus-tool",
+		Version: "2.0.0",
+		Usage:   "dbus connection debug tool!",
+		Action: func(c *cli.Context) error {
+			cli.ShowAppHelpAndExit(c, 0)
+			return nil
+		},
+		Commands: []*cli.Command{
+			{
+				Name:    "monitor",
+				Aliases: []string{"m"},
+				Usage:   "monitor dbus connection",
+				Action: func(c *cli.Context) error {
+					address := c.String("address")
+					progress := c.String("progress")
 
-	//sessionType := "session"
-	dbusType := SESSION
-	isSession := true
-	isSystem := false
-	isFollow := false
-	name := ""
+					var conn *dbus.Conn
+					var err error
+					if address == "system" {
+						conn, err = dbus.SystemBus()
+						if err != nil {
+							return err
+						}
+					} else {
+						conn, err = dbus.SessionBus()
+						if err != nil {
+							return err
+						}
+					}
 
-	flag.BoolVar(&isSession, "session", true, "use session dbus")
-	flag.BoolVar(&isSystem, "system", false, "use system dbus")
-	flag.BoolVar(&isFollow, "f", false, "follow monitor")
-	flag.StringVar(&name, "name", "", "display sender info with name")
-	flag.Parse()
+					dbusNamesInfo(conn, progress)
+					dbusMonitor(conn, progress)
+					return nil
+				},
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "address",
+						Aliases: []string{"a"},
+						Value:   "session",
+						Usage:   "set dbus address(session/system)",
+					},
+					&cli.StringFlag{
+						Name:    "progress",
+						Aliases: []string{"p"},
+						Usage:   "set which progess to filter",
+					},
+				},
+			},
+			{
+				Name:    "list",
+				Aliases: []string{"l"},
+				Usage:   "list dbus connection",
+				Action: func(c *cli.Context) error {
+					address := c.String("address")
+					progress := c.String("progress")
+					sender := c.String("sender")
 
-	if isSession && isSystem {
-		dbusType = SYSTEM
-	} else if !isSession && !isSystem {
-		dbusType = SESSION
-	} else if isSystem {
-		dbusType = SYSTEM
-	} else {
-		dbusType = SESSION
+					var conn *dbus.Conn
+					var err error
+					if address == "system" {
+						conn, err = dbus.SystemBus()
+						if err != nil {
+							return err
+						}
+					} else {
+						conn, err = dbus.SessionBus()
+						if err != nil {
+							return err
+						}
+					}
+
+					defer conn.Close()
+					if sender != "" {
+						p, err := GetPidTreeBySender(conn, sender, "")
+						if err != nil {
+							return err
+						}
+						fmt.Println(p.Display())
+					} else if progress != "" {
+						dbusNamesInfo(conn, progress)
+					} else if progress == "" && sender == "" {
+						dbusNamesInfo(conn, "")
+					}
+					return nil
+				},
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "address",
+						Aliases: []string{"a"},
+						Value:   "session",
+						Usage:   "set dbus address(session/system)",
+					},
+					&cli.StringFlag{
+						Name:    "progress",
+						Aliases: []string{"p"},
+						Usage:   "set which progess to filter",
+					},
+					&cli.StringFlag{
+						Name:    "sender",
+						Aliases: []string{"s"},
+						Usage:   "set which sender to filter",
+					},
+				},
+			},
+		},
 	}
 
-	var conn *dbus.Conn
-	var err error
-	if dbusType != SYSTEM {
-		conn, err = dbus.SessionBus()
-		if err != nil {
-			return
-		}
-	} else {
-		conn, err = dbus.SystemBus()
-		if err != nil {
-			return
-		}
-	}
+	app.EnableBashCompletion = true
 
-	if len(name) != 0 {
-		p, err := GetPidTreeBySender(conn, name)
-		if err != nil {
-			return
-		}
-		fmt.Println(p.Display())
-		return
+	err := app.Run(os.Args)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	dbusNamesInfo(conn)
-	// will block
-	if isFollow {
-		dbusMonitor(conn)
-	}
-
-	defer conn.Close()
 }
 
-func dbusNamesInfo(conn *dbus.Conn) {
+func dbusNamesInfo(conn *dbus.Conn, rule string) {
 	names := listNames(conn)
 	if len(names) == 0 {
 		return
@@ -111,7 +173,7 @@ func dbusNamesInfo(conn *dbus.Conn) {
 
 	for _, name := range names {
 		//fmt.Println("name:", name)
-		p, err := GetPidTreeBySender(conn, name)
+		p, err := GetPidTreeBySender(conn, name, rule)
 		if err != nil {
 			continue
 		}
@@ -121,7 +183,7 @@ func dbusNamesInfo(conn *dbus.Conn) {
 	}
 }
 
-func dbusMonitor(conn *dbus.Conn) {
+func dbusMonitor(conn *dbus.Conn, rule string) {
 
 	obj := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus").(*dbus.Object)
 
@@ -134,7 +196,7 @@ func dbusMonitor(conn *dbus.Conn) {
 	conn.Signal(ch)
 
 	for signal := range ch {
-		signalProcess(conn, signal)
+		signalProcess(conn, signal, rule)
 	}
 }
 
@@ -168,7 +230,7 @@ func listNames(conn *dbus.Conn) []string {
 	return names
 }
 
-func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
+func signalProcess(conn *dbus.Conn, sig *dbus.Signal, rule string) error {
 	if len(sig.Body) > 1 {
 		name := sig.Body[0].(string)
 		oldName := sig.Body[1].(string)
@@ -179,9 +241,12 @@ func signalProcess(conn *dbus.Conn, sig *dbus.Signal) error {
 		}
 
 		if oldName == "" && newName != "" {
-			p, err := GetPidTreeBySender(conn, newName)
+			p, err := GetPidTreeBySender(conn, newName, rule)
 			if err != nil {
-				return err
+				if err != fmt.Errorf("match error.") {
+					return err
+				}
+				return nil
 			}
 			fmt.Println(p.Display())
 		}
@@ -219,7 +284,7 @@ func GetPidInfo(pid uint32) (string, *linuxproc.ProcessStat, uint32, error) {
 	return string(cmdline), stat, fileStat.Uid, nil
 }
 
-func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
+func GetPidTreeBySender(conn *dbus.Conn, name string, progress string) (*ProcessInfo, error) {
 	pid, err := getConnectionUnixProcessID(conn, name)
 	if err != nil {
 		return nil, err
@@ -232,10 +297,15 @@ func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 
 	var node *ProcessInfo
 
+	hasMatch := false
 	for pid != 0 {
 		cmdline, stat, uid, err := GetPidInfo(pid)
 		if err != nil {
 			break
+		}
+
+		if progress != "" && !hasMatch && strings.Contains(cmdline, progress) && name != "" {
+			hasMatch = true
 		}
 
 		if node != nil {
@@ -258,6 +328,10 @@ func GetPidTreeBySender(conn *dbus.Conn, name string) (*ProcessInfo, error) {
 
 		name = ""
 		pid = uint32(stat.Ppid)
+	}
+
+	if !hasMatch && progress != "" {
+		return nil, fmt.Errorf("match error.")
 	}
 
 	if node == nil {
